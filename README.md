@@ -64,7 +64,7 @@ Quantitatively we found the following:
     </tbody>
 </table>
 
-And lastly to showcase the potential for real world usage: my living room from 10 images, without Camera Parameters or Depth sensors (completely inferred from monocular depth map prediction networks, scaled and matched to keypoints extracted from COLMAP).
+And lastly to showcase the potential for real world usage: my living room from 10 images, without ground-truth Camera Parameters or Depth sensors (completely inferred from monocular depth map prediction networks, scaled and matched to keypoints extracted from COLMAP).
 
 
 https://github.com/AlexSheldrick/mipnerf_pl/assets/59337109/fdf1684e-2dee-4fc5-98ce-997898c33b0a
