@@ -635,174 +635,56 @@ def lossfun_distortion(t, w):   #t=z_vals, w=weights. Loss from mip-nerf 360
 
     return loss_inter + loss_intra
 
-def lossfun_depth_weight(rays: namedtuple, tvals_, w, eps):
+def lossfun_depth_URF(rays: namedtuple, tvals_, w, eps):
     """Penalize sum of weights for empty interval
        Penalize squared distance from depth for near inteval"""
     depth = rays.depth    
     tvals = 0.5 * (tvals_[..., :-1] + tvals_[..., 1:])
-
-    dummy_1 = torch.as_tensor([1.0], device = depth.device)
     
-    #depth_t = depth.broadcast_to(tvals.shape)
-    #eps = eps * 3
     sigma = (eps / 3.) ** 2
     mask_near = ((tvals > (depth - eps)) & (tvals < (depth + eps))).to(depth.dtype).reshape(tvals.shape[0], -1)
     mask_empty = (tvals < (depth - eps)).to(depth.dtype).reshape(tvals.shape[0], -1)
     dist = mask_near * (tvals - depth)
     dist = torch.nan_to_num(1.0 / (sigma * math.sqrt(2 * math.pi)) * torch.exp(-(dist ** 2 / (2 * sigma ** 2 + 1e-6))))
     dist = (dist/ dist.max()) * mask_near
-    near_losses =  (((mask_near * w - dist) ** 2).sum() / torch.maximum(mask_near.sum(), dummy_1))
-    empty_losses =  (((mask_empty * w) ** 2).sum() / torch.maximum(mask_empty.sum(), dummy_1))
+    near_losses =  (((mask_near * w - dist) ** 2).sum() / torch.clamp(mask_near.sum(), min=1.0))
+    empty_losses =  (((mask_empty * w) ** 2).sum() / torch.clamp(mask_empty.sum(), min=1.0))
     return empty_losses, near_losses
-
-def lossfun_depth_weight_alex(rays: namedtuple, tvals_, w, eps):
-    """Penalize sum of weights for empty interval
-       Penalize squared distance from depth for near inteval"""
-    depth = rays.depth    
-    tvals = 0.5 * (tvals_[..., :-1] + tvals_[..., 1:]) #* torch.linalg.norm(torch.unsqueeze(rays.directions, dim=-2), dim=-1)
-    dummy_1 = torch.as_tensor([1.0], device = depth.device)
-    
-    #depth_t = depth.broadcast_to(tvals.shape)
-    sigma = (eps / 3.) ** 2
-    mask_near = ((tvals > (depth - eps)) & (tvals < (depth + eps))).to(depth.dtype).reshape(tvals.shape[0], -1)
-    mask_empty = (tvals < (depth - eps)).to(depth.dtype).reshape(tvals.shape[0], -1)
-    dist = mask_near * (tvals - depth)
-    dist = torch.nan_to_num(1.0 / (sigma * math.sqrt(2 * math.pi)) * torch.exp(-(dist ** 2 / (2 * sigma ** 2 + 1e-6))))
-    dist = (dist/ dist.max()) * mask_near #(BS, N_samples)
-    near_losses =  (((mask_near * w - dist) ** 2).sum() / torch.maximum(mask_near.sum(), dummy_1))
-    near_losses = (near_losses**2)
-    empty_losses =  (((mask_empty * w) ** 2).sum() / torch.maximum(mask_empty.sum(), dummy_1))
-
-    normal_weights = ((mask_near * w )) #make distribution over nonzero/nonmasked weights
-    return empty_losses, near_losses, normal_weights
 
 def lossfun_depth_weight_CDF(rays: namedtuple, tvals_, w, eps, uncertain = False, beta = 0.):
     """Penalize sum of weights for empty interval
        Penalize squared distance from depth for near inteval"""
-    depth = rays.depth #.clone().detach()    
+    depth = rays.depth
 
-    """if not uncertain:
-        mask = rays.depth_vars > 0
-        depth[mask] = -5
-        beta = 0.02
-        #alpha = 0.0
-    else:
-        mask = rays.depth_vars > 0
-        depth[~mask] = -5
-        beta = rays.depth_vars
-        #alpha = 0.1"""
-
-    tvals = 0.5 * (tvals_[..., :-1] + tvals_[..., 1:])
+    t = 0.5 * (tvals_[..., :-1] + tvals_[..., 1:])
     dummy_1 = torch.as_tensor([1.0], device = depth.device)
     sigma = 0.03   
     #beta = 2*sigma
 
-    mask_near_close = (((tvals) > (depth  - 3*sigma)) & (tvals  < (depth)) & (depth > 0)).to(depth.dtype).reshape(tvals.shape[0], -1)
-    mask_near_far = ((tvals  > (depth)) & ((tvals) < (depth  + 3*sigma)) & (depth > 0)).to(depth.dtype).reshape(tvals.shape[0], -1)
-    mask_empty = (((tvals) < (depth - 3*sigma)) & (depth > 0)).to(depth.dtype).reshape(tvals.shape[0], -1)
-    alpha = 0. #alpha, tolerance parameter, relates to depth uncertainty
-    opacity = 1.0 #w.sum(dim=-1).unsqueeze(1) 
-    #w shape: BS, N_samples
+    mask_close = ((t > depth  - 3*sigma - beta) & (t  < depth - beta) & (depth > 0)).to(depth.dtype).reshape(t.shape[0], -1)
+    mask_far = ((t  > depth + beta) & (t < depth  + 3*sigma + beta) & (depth > 0)).to(depth.dtype).reshape(t.shape[0], -1)
+    mask_empty = ((t < depth - 3*sigma - beta) & (depth > 0)).to(depth.dtype).reshape(t.shape[0], -1)
 
-    w_cumsum = torch.cumsum(w, dim=-1) # BS, N_samples
+    empty_losses = ((mask_empty * w)**2).sum() 
+    empty_losses = empty_losses / torch.clamp(mask_empty.sum(), min=1.0) 
+
+    w_cumsum = weights_normed*torch.cumsum(w, dim=-1) # BS, N_samples
     # Construct $\Phi$ and evaluate on t_i's
-    m_1 = torch.distributions.normal.Normal(loc = depth - beta, scale = sigma)
-    cdf_values_1 = opacity * m_1.cdf(tvals) # BS, N_samples
-    
-    if beta > 0: 
-        m_2 = torch.distributions.normal.Normal(loc = depth + beta, scale = sigma)
-        cdf_values_2 = opacity * m_2.cdf(tvals) # BS, N_samples     
-    else: 
-        m_2 = m_1
-        cdf_values_2 = cdf_values_1
+    m_1 = torch.distributions.normal.Normal(loc = depth - beta, scale = sigma) # BS, N_samples
+    m_2 = torch.distributions.normal.Normal(loc = depth + beta, scale = sigma) # BS, N_samples
     
     #Before Depth we are upper bounded by the CDF
-    near_close_losses = (w_cumsum - cdf_values_1 * opacity - alpha)
-    near_close_losses = torch.maximum(mask_near_close*near_close_losses, torch.zeros_like(near_close_losses))
-    near_close_losses = (near_close_losses**2).sum()  / torch.maximum(mask_near_close.sum(), dummy_1)
-
-    #After Depth we are lower bounded by the CDF
-    near_far_losses = (cdf_values_2 * opacity - w_cumsum - alpha) 
-    near_far_losses = torch.maximum(mask_near_far*near_far_losses, torch.zeros_like(near_far_losses))
-    near_far_losses = (near_far_losses**2).sum() / torch.maximum(mask_near_far.sum(), dummy_1)
-
-    near_losses = (near_close_losses + near_far_losses)
-    empty_losses =  (((mask_empty * w)**2).sum() / torch.maximum(mask_empty.sum(), dummy_1)) 
-    return empty_losses, near_losses
-
-def lossfun_depth_weight_CDF_test(rays: namedtuple, tvals_, w, eps, uncertain = False):
-    """Penalize sum of weights for empty interval
-       Penalize squared distance from depth for near inteval"""
-    depth = rays.depth 
-    tvals = 0.5 * (tvals_[..., :-1] + tvals_[..., 1:])
-    dummy_1 = torch.as_tensor([1.0], device = depth.device)
-
-    #sigma = (rays.depth_vars)
-    sigma = 0.03
-    #beta = sigma * 3
-    beta = 0.
-    #beta = sigma
-
-    # & (depth > 0) to ignore invalid depth points
-    mask_near = ((tvals  < (depth)) & (depth > 0)).to(depth.dtype).reshape(tvals.shape[0], -1)
-    mask_far = ((tvals  > (depth)) & (depth > 0)).to(depth.dtype).reshape(tvals.shape[0], -1)
-
-    #w shape: BS, N_samples
-    m_1 = torch.distributions.normal.Normal(loc = depth - beta, scale = sigma) 
-    m_2 = torch.distributions.normal.Normal(loc = depth + beta, scale = sigma) 
-
-    opacity = 1.0 #w.sum(dim=-1).unsqueeze(1) # (unused)
-    alpha = 0.#tolerance parameter, additional depth uncertainty parameter (unused)
-    cdf_values_1 = opacity * m_1.cdf(tvals - beta) # BS, N_samples
-    cdf_values_2 = opacity * m_2.cdf(tvals + beta) # BS, N_samples
-    w_cumsum = torch.cumsum(w, dim=-1) # BS, N_samples    
+    close_losses = (w_cumsum - m_1.cdf(t))
+    close_losses = torch.clamp(mask_close*close_losses, min=0.0)
     
-    #Before Depth we are upper bounded by the CDF
-    near_losses = (w_cumsum - cdf_values_1 * opacity - alpha)
-    near_losses = torch.maximum(mask_near*near_losses, torch.zeros_like(near_losses))
-
     #After Depth we are lower bounded by the CDF
-    far_losses = (cdf_values_2 * opacity - w_cumsum - alpha) 
-    far_losses = torch.maximum(mask_far*far_losses, torch.zeros_like(far_losses))
+    far_losses = (m_2.cdf(t)  - w_cumsum) 
+    far_losses = torch.clamp(mask_far*far_losses, min=0.0)
 
-    bound_losses = ((near_losses**2).sum() + (far_losses**2).sum())  #(rays.depth.shape[0])
-    bound_losses = bound_losses / torch.maximum(mask_far.sum() + mask_near.sum(), dummy_1)
-    empty_losses =  torch.zeros_like(bound_losses)
-    return empty_losses, bound_losses
+    near_losses = (close_losses**2 + far_losses**2).sum()  
+    near_losses = near_losses / torch.clamp(mask_close.sum() + mask_far.sum(), min=1.0)    
 
-def normal_loss_lowerbound(rays: namedtuple, tvals_, w, eps, n_pred):
-    depth = rays.depth  
-    tvals = 0.5 * (tvals_[..., :-1] + tvals_[..., 1:])
-    depth_t = depth.broadcast_to(tvals.shape)
-    dummy_1 = torch.as_tensor([1.0], device = depth.device)
-    epsilon = 1e-3
-    sigma = 0.1 #hyperparam, set in config
-    #mask_near = ((tvals > (depth - 2*sigma)) & (tvals < (depth + 2*sigma))).to(depth.dtype).reshape(tvals.shape[0], -1) #BS, N_samples
-    mask_near = ((tvals > (depth - 2*sigma)) & (tvals < (depth + epsilon))).to(depth.dtype).reshape(tvals.shape[0], -1) #BS, N_samples FRONT HALF
-    g = mask_near * (tvals - depth_t) #BS, N_samples
-    #dont need to normalize since we dont care about it being a distribution, its just a bell-shaped function as lowerbound.
-    g = torch.nan_to_num(torch.exp(-(g ** 2 / (2 * (6*sigma) ** 2))))
-    mask_near = (torch.cumsum(w, -1) < 0.75).to(depth.dtype)
-
-
-    #normalize the function so that the peak rises to 1 by the end.
-    eps_min = 0.15
-
-    normalization = min(eps_min / eps, 1.0)
-    g = g * normalization #(BS, N_samples)
-    #g = normalization
-
-    n_gt = rays.normal #BS, 3
-    mask = (torch.any(rays.normal, dim=-1))
-    # MAE of Normal alignment    
-    loss = n_gt[:,None,:] * n_pred 
-    loss = torch.sum(loss, -1) * mask[..., None]
-    loss =  w * torch.maximum((g - loss), torch.zeros_like(loss))
-    loss = mask_near * loss  # --> (BS, Num_samples)
-    loss = (loss).sum(dim=-1) # --> (BS)
-    loss = torch.maximum(torch.zeros_like(loss), loss) ** 2
-    loss = loss / torch.maximum(mask_near.sum(), dummy_1)
-    return loss
+    return near_losses, empty_losses
 
 
 def lossfun_outer(t, w, t_env, w_env, eps=torch.finfo(torch.float16).eps):
