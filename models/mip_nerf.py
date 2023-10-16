@@ -670,19 +670,18 @@ def lossfun_depth_weight_CDF(rays: namedtuple, tvals_, w, eps, uncertain = False
 
     w_cumsum = weights_normed*torch.cumsum(w, dim=-1) # BS, N_samples
     # Construct $\Phi$ and evaluate on t_i's
-    m_1 = torch.distributions.normal.Normal(loc = depth - beta, scale = sigma) # BS, N_samples
-    m_2 = torch.distributions.normal.Normal(loc = depth + beta, scale = sigma) # BS, N_samples
+    normal = torch.distributions.normal.Normal(loc = depth, scale = sigma) # BS, N_samples
     
-    #Before Depth we are upper bounded by the CDF
-    close_losses = (w_cumsum - m_1.cdf(t))
+    #Before Depth we are upper bounded by the CDF, we evaluate at t + beta because of depth uncertainty
+    close_losses = (w_cumsum - normal.cdf(t + beta))
     close_losses = torch.clamp(mask_close*close_losses, min=0.0)
     
-    #After Depth we are lower bounded by the CDF
-    far_losses = (m_2.cdf(t)  - w_cumsum) 
+    #After Depth we are lower bounded by the CDF, we evaluate at t - beta because of depth uncertainty
+    far_losses = (normal.cdf(t - beta)  - w_cumsum) 
     far_losses = torch.clamp(mask_far*far_losses, min=0.0)
 
     near_losses = (close_losses**2 + far_losses**2).sum()  
-    near_losses = near_losses / torch.clamp(mask_close.sum() + mask_far.sum(), min=1.0)    
+    near_losses = near_losses / torch.clamp(mask_close.sum() + mask_far.sum(), min=1.0)  
 
     return near_losses, empty_losses
 
