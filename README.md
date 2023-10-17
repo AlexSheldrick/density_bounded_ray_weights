@@ -69,7 +69,7 @@ And lastly to showcase the potential for real world usage: my living room from 1
 
 https://github.com/AlexSheldrick/mipnerf_pl/assets/59337109/fdf1684e-2dee-4fc5-98ce-997898c33b0a
 
-And additional outputs (ScanNet Room738, 18 images, camera parameters inferred from COLMAP)
+And additional outputs (ScanNet Room738, 15 images, camera parameters inferred from COLMAP)
 
 https://github.com/AlexSheldrick/mipnerf_pl/assets/59337109/6286f4b7-f218-4ae0-a5fd-a986a31367f1
 
